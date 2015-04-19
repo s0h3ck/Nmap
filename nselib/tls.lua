@@ -153,6 +153,24 @@ EC_POINT_FORMATS = {
 }
 
 ---
+-- RFC 5246 section 7.4.1.4.1. Signature Algorithms
+HashAlgorithms = {
+  none = 0,
+  md5 = 1,
+  sha1 = 2,
+  sha224 = 3,
+  sha256 = 4,
+  sha384 = 5,
+  sha512 = 6,
+}
+SignatureAlgorithms = {
+  anonymous = 0,
+  rsa = 1,
+  dsa = 2,
+  ecdsa = 3,
+}
+
+---
 -- Extensions
 -- RFC 6066, draft-agl-tls-nextprotoneg-03
 -- https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
@@ -212,6 +230,16 @@ EXTENSION_HELPERS = {
       list[#list+1] = bin.pack(">C", EC_POINT_FORMATS[format])
     end
     return bin.pack(">p", table.concat(list))
+  end,
+  ["signature_algorithms"] = function(signature_algorithms)
+    local list = {}
+    for _, pair in ipairs(signature_algorithms) do
+      list[#list+1] = bin.pack(">CC",
+        HashAlgorithms[pair[1]] or pair[1],
+        SignatureAlgorithms[pair[2]] or pair[2]
+        )
+    end
+    return bin.pack(">P", table.concat(list))
   end,
   ["next_protocol_negotiation"] = tostring,
 }
@@ -1106,7 +1134,7 @@ function record_read(buffer, i)
   h["type"] = name
   name = find_key(PROTOCOLS, proto)
   if name == nil then
-    stdnse.debug1("Unknown TLS Protocol: 0x%x", typ)
+    stdnse.debug1("Unknown TLS Protocol: 0x%04x", proto)
     return j, nil
   end
   h["protocol"] = name
@@ -1229,6 +1257,24 @@ function record_write(type, protocol, b)
   })
 end
 
+-- Claim to support every hash and signature algorithm combination (TLSv1.2 only)
+--
+local signature_algorithms_all
+do
+  local sigalgs = {}
+  for hash, _ in pairs(HashAlgorithms) do
+    for sig, _ in pairs(SignatureAlgorithms) do
+      -- RFC 5246 7.4.1.4.1.
+      -- The "anonymous" value is meaningless in this context but used in
+      -- Section 7.4.3.  It MUST NOT appear in this extension.
+      if sig ~= "anonymous" then
+        sigalgs[#sigalgs+1] = {hash, sig}
+      end
+    end
+  end
+  signature_algorithms_all = EXTENSION_HELPERS["signature_algorithms"](sigalgs)
+end
+
 ---
 -- Build a client_hello message
 --
@@ -1294,14 +1340,23 @@ function client_hello(t)
   if PROTOCOLS[protocol] and protocol ~= "SSLv3" then
     local extensions = {}
     if t["extensions"] ~= nil then
+      -- Do we need to add the signature_algorithms extension?
+      local need_sigalg = (protocol == "TLSv1.2")
       -- Add specified extensions.
       for extension, data in pairs(t["extensions"]) do
         if type(extension) == "number" then
           table.insert(extensions, bin.pack(">S", extension))
         else
+          if extension == "signature_algorithms" then
+            need_sigalg = false
+          end
           table.insert(extensions, bin.pack(">S", EXTENSIONS[extension]))
         end
         table.insert(extensions, bin.pack(">P", data))
+      end
+      if need_sigalg then
+        table.insert(extensions, bin.pack(">S", EXTENSIONS["signature_algorithms"]))
+        table.insert(extensions, bin.pack(">P", signature_algorithms_all))
       end
     end
     -- Extensions are optional

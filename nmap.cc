@@ -321,7 +321,6 @@ static void printusage(int rc) {
          "  --open: Only show open (or possibly open) ports\n"
          "  --packet-trace: Show all packets sent and received\n"
          "  --iflist: Print host interfaces and routes (for debugging)\n"
-         "  --log-errors: Log errors/warnings to the normal-format output file\n"
          "  --append-output: Append to rather than clobber specified output files\n"
          "  --resume <filename>: Resume an aborted scan\n"
          "  --stylesheet <path/URL>: XSL stylesheet to transform XML output to HTML\n"
@@ -1427,8 +1426,10 @@ void  apply_delayed_options() {
 
 
   if (o.osscan) {
-    o.reference_FPs = parse_fingerprint_reference_file("nmap-os-db");
-    o.os_labels_ipv6 = load_fp_matches();
+    if (o.af() == AF_INET)
+        o.reference_FPs = parse_fingerprint_reference_file("nmap-os-db");
+    else if (o.af() == AF_INET6)
+        o.os_labels_ipv6 = load_fp_matches();
   }
 
   // Must check and change this before validate_scan_lists
